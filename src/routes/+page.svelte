@@ -1,9 +1,28 @@
 <script lang="ts">
 	import { SvelteMap } from 'svelte/reactivity';
-	import { Type, ChevronDown, Table2, MousePointer2, Hand, X, Download, Plus, Minus, Maximize2 } from '@lucide/svelte';
+	import { tick } from 'svelte';
+	import { Type, ChevronDown, Table2, MousePointer2, Hand, X, Download, Plus, Minus, Maximize2, MessageSquare, Check, ChevronsUpDown } from '@lucide/svelte';
 	import faviconSvg from '$lib/assets/favicon.svg?raw';
+	import { Button } from '$lib/components/ui/button';
+	import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '$lib/components/ui/dropdown-menu';
+	import * as Popover from '$lib/components/ui/popover';
+	import * as Command from '$lib/components/ui/command';
+	import { cn } from '$lib/utils';
+	import { Slider } from '$lib/components/ui/slider';
 
-	type Tool = 'select' | 'hand';
+	type Tool = 'select' | 'hand' | 'annotation';
+
+	type Annotation = {
+		id: string;
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+		text: string;
+		opacity: number;
+		bgColor: string;
+		fontSize: number;
+	};
 
 	type Row = {
 		id: string;
@@ -62,9 +81,9 @@
 	let spaceHeld = $state(false);
 	let selectedFont = $state('Fira Sans');
 	let fontPickerOpen = $state(false);
+	let fontPickerTriggerRef = $state<HTMLButtonElement>(null!);
 	let editorOpen = $state(true);
 	let nextId = $state(6);
-	let downloadOpen = $state(false);
 	let svgEl = $state<SVGSVGElement | null>(null);
 	let linkOpacity = $state(0.22);
 	let labelBoxOpacity = $state(1);
@@ -72,6 +91,20 @@
 	let editingNode = $state<string | null>(null);
 	let editNodeName = $state('');
 	let nodeColors = new SvelteMap<string, string>();
+
+	// Annotations
+	let annotations = $state<Annotation[]>([]);
+	let annotationNextId = $state(1);
+	let selectedAnnotationId = $state<string | null>(null);
+	let draggingAnnotationId = $state<string | null>(null);
+	let dragAnnotationOffsetX = 0;
+	let dragAnnotationOffsetY = 0;
+	let resizingAnnotationId = $state<string | null>(null);
+	let resizeStartClientX = 0;
+	let resizeStartClientY = 0;
+	let resizeStartW = 0;
+	let resizeStartH = 0;
+	let hoveredAnnotationId = $state<string | null>(null);
 
 	// Node drag
 	let manualPositions = new SvelteMap<string, { x: number; y: number }>();
@@ -111,14 +144,29 @@
 			? 'cursor-crosshair'
 			: hoveredRemoveHandle !== null
 				? 'cursor-pointer'
-				: activeTool === 'hand' || spaceHeld
-				? isPanning ? 'cursor-grabbing' : 'cursor-grab'
-				: draggingNode !== null
-					? 'cursor-grabbing'
-					: hoveredNode !== null
-						? 'cursor-move'
-						: 'cursor-default'
+				: activeTool === 'annotation'
+					? 'cursor-crosshair'
+					: resizingAnnotationId !== null
+						? 'cursor-se-resize'
+						: activeTool === 'hand' || spaceHeld
+						? isPanning ? 'cursor-grabbing' : 'cursor-grab'
+						: draggingNode !== null || draggingAnnotationId !== null
+							? 'cursor-grabbing'
+							: hoveredNode !== null || hoveredAnnotationId !== null
+								? 'cursor-move'
+								: 'cursor-default'
 	);
+
+	let selectedAnnotation = $derived(
+		selectedAnnotationId ? (annotations.find(a => a.id === selectedAnnotationId) ?? null) : null
+	);
+	let annotationOverlayPos = $derived((() => {
+		if (!selectedAnnotation) return null;
+		const sx = Math.round(selectedAnnotation.x * zoom + panX);
+		const sy = Math.round(selectedAnnotation.y * zoom + panY);
+		const sw = Math.round(selectedAnnotation.width * zoom);
+		return { x: sx + sw + 12, y: sy };
+	})());
 	let gridPx = $derived(GRID_SIZE * zoom);
 	let gridOffsetX = $derived(((panX % gridPx) + gridPx) % gridPx - gridPx / 2);
 	let gridOffsetY = $derived(((panY % gridPx) + gridPx) % gridPx - gridPx / 2);
@@ -309,6 +357,48 @@
 		return null;
 	}
 
+	function hitTestAnnotation(cx: number, cy: number): Annotation | null {
+		for (let i = annotations.length - 1; i >= 0; i--) {
+			const a = annotations[i];
+			if (cx >= a.x && cx <= a.x + a.width && cy >= a.y && cy <= a.y + a.height) return a;
+		}
+		return null;
+	}
+
+	function deleteAnnotation(id: string) {
+		const idx = annotations.findIndex(a => a.id === id);
+		if (idx !== -1) annotations.splice(idx, 1);
+		if (selectedAnnotationId === id) selectedAnnotationId = null;
+	}
+
+	function onAnnotationPointerDown(e: PointerEvent, ann: Annotation) {
+		selectedAnnotationId = ann.id;
+		draggingAnnotationId = ann.id;
+		const { x: cx, y: cy } = toCanvas(e.clientX, e.clientY);
+		dragAnnotationOffsetX = cx - ann.x;
+		dragAnnotationOffsetY = cy - ann.y;
+		svgEl?.setPointerCapture(e.pointerId);
+		e.preventDefault();
+	}
+
+	function onAnnotationResizeStart(e: PointerEvent, ann: Annotation) {
+		resizingAnnotationId = ann.id;
+		resizeStartClientX = e.clientX;
+		resizeStartClientY = e.clientY;
+		resizeStartW = ann.width;
+		resizeStartH = ann.height;
+		svgEl?.setPointerCapture(e.pointerId);
+		e.preventDefault();
+	}
+
+	function calcAnnotationHeight(text: string, fontSize: number, width: number): number {
+		const lineH = Math.round(fontSize * 1.6);
+		const charsPerLine = Math.max(1, Math.floor((width - 20) / (fontSize * 0.56)));
+		const totalLines = text.split('\n').reduce((sum, line) =>
+			sum + Math.max(1, Math.ceil((line.length || 0.1) / charsPerLine)), 0);
+		return Math.max(60, Math.round(totalLines * lineH) + 24);
+	}
+
 	function removeNode(name: string) {
 		for (let i = rows.length - 1; i >= 0; i--) {
 			if (rows[i].from === name || rows[i].to === name) rows.splice(i, 1);
@@ -321,6 +411,11 @@
 	// Convert screen coords → canvas (world) coords
 	function toCanvas(clientX: number, clientY: number) {
 		return { x: (clientX - panX) / zoom, y: (clientY - panY) / zoom };
+	}
+
+	function closeAndFocusFontTrigger() {
+		fontPickerOpen = false;
+		tick().then(() => fontPickerTriggerRef?.focus());
 	}
 
 	// ── Canvas interaction ───────────────────────────────────────────────────────
@@ -351,8 +446,22 @@
 		if (editingNode) return;
 		const svg = e.currentTarget as SVGSVGElement;
 
+		// Annotation tool — create new annotation on click
+		if (activeTool === 'annotation' && e.button === 0) {
+			const { x: cx, y: cy } = toCanvas(e.clientX, e.clientY);
+			const id = String(annotationNextId++);
+			annotations.push({ id, x: cx - 90, y: cy - 45, width: 180, height: 90, text: '', opacity: 0.9, bgColor: '#fef9c3', fontSize: 13 });
+			selectedAnnotationId = id;
+			activeTool = 'select';
+			e.preventDefault();
+			return;
+		}
+
 		if (activeTool === 'select' && e.button === 0) {
 			const { x: cx, y: cy } = toCanvas(e.clientX, e.clientY);
+
+			// Deselect annotation when clicking canvas directly
+			selectedAnnotationId = null;
 
 			// Remove handle — delete node
 			const removeHandle = hitTestRemoveHandle(cx, cy);
@@ -409,6 +518,21 @@
 			return;
 		}
 
+		if (resizingAnnotationId !== null) {
+			const ann = annotations.find(a => a.id === resizingAnnotationId);
+			if (ann) {
+				ann.width = Math.max(80, resizeStartW + (e.clientX - resizeStartClientX) / zoom);
+				ann.height = Math.max(40, resizeStartH + (e.clientY - resizeStartClientY) / zoom);
+			}
+			return;
+		}
+
+		if (draggingAnnotationId !== null) {
+			const ann = annotations.find(a => a.id === draggingAnnotationId);
+			if (ann) { ann.x = cx - dragAnnotationOffsetX; ann.y = cy - dragAnnotationOffsetY; }
+			return;
+		}
+
 		if (draggingNode !== null) {
 			manualPositions.set(draggingNode, {
 				x: cx - dragNodeOffsetX,
@@ -424,9 +548,10 @@
 		}
 
 		if (activeTool === 'select') {
-			hoveredNode = hitTestNode(cx, cy)?.name ?? null;
-			hoveredHandle = hitTestHandle(cx, cy);
-			hoveredRemoveHandle = hitTestRemoveHandle(cx, cy);
+			hoveredAnnotationId = hitTestAnnotation(cx, cy)?.id ?? null;
+			hoveredNode = hoveredAnnotationId ? null : (hitTestNode(cx, cy)?.name ?? null);
+			hoveredHandle = hoveredAnnotationId ? null : hitTestHandle(cx, cy);
+			hoveredRemoveHandle = hoveredAnnotationId ? null : hitTestRemoveHandle(cx, cy);
 		}
 	}
 
@@ -451,18 +576,22 @@
 			return;
 		}
 		draggingNode = null;
+		draggingAnnotationId = null;
+		resizingAnnotationId = null;
 		isPanning = false;
 	}
 
 	function onPointerLeave() {
-		if (!draggingNode) { hoveredNode = null; hoveredHandle = null; hoveredRemoveHandle = null; }
+		if (!draggingNode && !draggingAnnotationId) { hoveredNode = null; hoveredHandle = null; hoveredRemoveHandle = null; hoveredAnnotationId = null; }
 	}
 
 	function onKeyDown(e: KeyboardEvent) {
-		if ((e.target as HTMLElement).tagName === 'INPUT') return;
+		const tag = (e.target as HTMLElement).tagName;
+		if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 		if (e.code === 'Space' && !e.repeat) { spaceHeld = true; e.preventDefault(); }
 		if (e.key === 'h') activeTool = 'hand';
-		if (e.key === 'v' || e.key === 'Escape') { activeTool = 'select'; connectingFrom = null; }
+		if (e.key === 'a' && !e.ctrlKey && !e.metaKey) activeTool = 'annotation';
+		if (e.key === 'v' || e.key === 'Escape') { activeTool = 'select'; connectingFrom = null; selectedAnnotationId = null; }
 		if ((e.ctrlKey || e.metaKey) && e.key === '0') centerDiagram();
 	}
 
@@ -629,14 +758,12 @@
 		a.download = 'sankey-diagram.svg';
 		a.click();
 		URL.revokeObjectURL(url);
-		downloadOpen = false;
 	}
 
 	async function downloadPNG() {
 		const svgStr = buildExportSvg();
 		const bbox = getExportBBox();
 		if (!svgStr || !bbox) return;
-		downloadOpen = false;
 
 		const scale = 2;
 		const canvas = document.createElement('canvas');
@@ -677,87 +804,117 @@
 		<div class="w-px h-5 bg-slate-200 shrink-0"></div>
 
 		<!-- Font picker -->
-		<div class="relative shrink-0">
-			<button
-				onclick={() => (fontPickerOpen = !fontPickerOpen)}
-				class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-700 hover:bg-slate-50 transition-colors bg-white"
-				style="font-family: {fontFamily};"
-			>
-				<Type size={13} class="text-slate-400 shrink-0" />
-				<span>{selectedFont}</span>
-				<ChevronDown size={10} class="text-slate-400 shrink-0" />
-			</button>
-
-			{#if fontPickerOpen}
-				<button class="fixed inset-0 z-20 cursor-default" onclick={() => (fontPickerOpen = false)} aria-label="Close font picker" tabindex="-1"></button>
-				<div class="absolute top-full left-0 mt-1 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 w-44 overflow-hidden">
-					{#each FONTS as font (font.family)}
-						<button
-							class="w-full px-4 py-2.5 text-left text-sm transition-colors {selectedFont === font.family ? 'text-violet-700 bg-violet-50' : 'text-slate-700 hover:bg-slate-50'}"
-							style="font-family: '{font.family}', sans-serif;"
-							onclick={() => { selectedFont = font.family; fontPickerOpen = false; }}
-						>{font.name}</button>
-					{/each}
-				</div>
-			{/if}
-		</div>
+		<Popover.Root bind:open={fontPickerOpen}>
+			<Popover.Trigger bind:ref={fontPickerTriggerRef}>
+				{#snippet child({ props }: { props: Record<string, unknown> })}
+					<Button
+						{...props}
+						variant="outline"
+						size="sm"
+						class="rounded-lg shrink-0 w-36 justify-between"
+						role="combobox"
+						aria-expanded={fontPickerOpen}
+						style="font-family: {fontFamily};"
+					>
+						<Type size={13} class="text-slate-400 shrink-0" />
+						<span class="flex-1 text-left">{selectedFont}</span>
+						<ChevronsUpDown size={10} class="text-slate-400 shrink-0" />
+					</Button>
+				{/snippet}
+			</Popover.Trigger>
+			<Popover.Content class="w-44 p-0" align="start">
+				<Command.Root>
+					<Command.Input placeholder="Search font..." />
+					<Command.List>
+						<Command.Empty>No font found.</Command.Empty>
+						<Command.Group>
+							{#each FONTS as font (font.family)}
+								<Command.Item
+									value={font.family}
+									onSelect={() => {
+										selectedFont = font.family;
+										closeAndFocusFontTrigger();
+									}}
+									style="font-family: '{font.family}', sans-serif;"
+								>
+									<Check class={cn(selectedFont !== font.family && 'text-transparent')} />
+									{font.name}
+								</Command.Item>
+							{/each}
+						</Command.Group>
+					</Command.List>
+				</Command.Root>
+			</Popover.Content>
+		</Popover.Root>
 
 		<div class="flex-1"></div>
 
 		<!-- Download -->
-		<div class="relative shrink-0">
-			<button
-				onclick={() => (downloadOpen = !downloadOpen)}
-				class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-sm text-slate-600 hover:bg-slate-50 transition-colors"
-				title="Download diagram"
-			>
-				<Download size={14} />
-				<span>Export</span>
-				<ChevronDown size={10} class="text-slate-400" />
-			</button>
-
-			{#if downloadOpen}
-				<button class="fixed inset-0 z-20 cursor-default" onclick={() => (downloadOpen = false)} aria-label="Close download menu" tabindex="-1"></button>
-				<div class="absolute top-full right-0 mt-1 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 w-36 overflow-hidden">
-					<button
-						onclick={downloadSVG}
-						class="w-full px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-					>Download SVG</button>
-					<button
-						onclick={downloadPNG}
-						class="w-full px-4 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-					>Download PNG</button>
-				</div>
-			{/if}
-		</div>
+		<DropdownMenu>
+			<DropdownMenuTrigger>
+				{#snippet child({ props }: { props: Record<string, unknown> })}
+					<Button
+						variant="outline"
+						size="sm"
+						class="rounded-lg shrink-0"
+						title="Download diagram"
+						{...props}
+					>
+						<Download size={14} />
+						<span>Export</span>
+						<ChevronDown size={10} class="text-slate-400" />
+					</Button>
+				{/snippet}
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" class="w-36">
+				<DropdownMenuItem onclick={downloadSVG}>Download SVG</DropdownMenuItem>
+				<DropdownMenuItem onclick={downloadPNG}>Download PNG</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
 
 		<!-- Editor toggle -->
-		<button
+		<Button
+			variant="outline"
+			size="sm"
 			onclick={() => (editorOpen = !editorOpen)}
-			class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm transition-colors {editorOpen ? 'border-violet-300 bg-violet-50 text-violet-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}"
+			class="rounded-lg {editorOpen ? 'border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 hover:text-violet-700' : ''}"
 			title="Toggle data editor"
 		>
 			<Table2 size={14} />
 			<span>Data</span>
-		</button>
+		</Button>
 	</header>
 
 	<!-- ── Left toolbar ── -->
 	<aside class="absolute left-3 top-1/2 -translate-y-1/2 z-10 flex flex-col gap-1 bg-white rounded-xl shadow-md border border-slate-200 p-1.5">
-		<button
-			class="w-9 h-9 flex items-center justify-center rounded-lg transition-colors {activeTool === 'select' ? 'bg-violet-100 text-violet-700' : 'text-slate-500 hover:bg-slate-100'}"
+		<Button
+			variant="ghost"
+			size="icon"
 			onclick={() => (activeTool = 'select')}
+			class="rounded-lg {activeTool === 'select' ? 'bg-violet-100 text-violet-700 hover:bg-violet-100 hover:text-violet-700' : 'text-slate-500'}"
 			title="Select / Move (V)"
 		>
 			<MousePointer2 size={15} />
-		</button>
-		<button
-			class="w-9 h-9 flex items-center justify-center rounded-lg transition-colors {activeTool === 'hand' ? 'bg-violet-100 text-violet-700' : 'text-slate-500 hover:bg-slate-100'}"
+		</Button>
+		<Button
+			variant="ghost"
+			size="icon"
 			onclick={() => (activeTool = 'hand')}
+			class="rounded-lg {activeTool === 'hand' ? 'bg-violet-100 text-violet-700 hover:bg-violet-100 hover:text-violet-700' : 'text-slate-500'}"
 			title="Hand / Pan (H)"
 		>
 			<Hand size={17} />
-		</button>
+		</Button>
+		<div class="w-full h-px bg-slate-100 my-0.5"></div>
+		<Button
+			variant="ghost"
+			size="icon"
+			onclick={() => (activeTool = 'annotation')}
+			class="rounded-lg {activeTool === 'annotation' ? 'bg-violet-100 text-violet-700 hover:bg-violet-100 hover:text-violet-700' : 'text-slate-500'}"
+			title="Annotation (A)"
+		>
+			<MessageSquare size={15} />
+		</Button>
 	</aside>
 
 	<!-- ── Canvas SVG ── -->
@@ -801,6 +958,67 @@
 			<!-- ── Links ── -->
 			{#each layout.links as link (link.id)}
 				<path d={link.d} fill={link.color} opacity={linkOpacity} />
+			{/each}
+
+			<!-- ── Annotations ── -->
+			{#each annotations as ann (ann.id)}
+				{@const isSelected = selectedAnnotationId === ann.id}
+				{@const isHovered = hoveredAnnotationId === ann.id}
+				<g
+					role="button"
+					aria-label="Annotation"
+					tabindex="-1"
+					onpointerdown={(e) => {
+						e.stopPropagation();
+						if (activeTool === 'select') onAnnotationPointerDown(e, ann);
+						else if (activeTool === 'annotation') { selectedAnnotationId = ann.id; activeTool = 'select'; }
+					}}
+					ondblclick={(e) => { e.stopPropagation(); selectedAnnotationId = ann.id; }}
+				>
+					<rect
+						x={ann.x} y={ann.y}
+						width={ann.width} height={ann.height}
+						rx="8"
+						fill={ann.bgColor}
+						opacity={ann.opacity}
+						stroke={isSelected ? '#6366f1' : isHovered ? '#94a3b8' : 'none'}
+						stroke-width={1.5 / zoom}
+					/>
+					<foreignObject
+						x={ann.x + 10} y={ann.y + 8}
+						width={Math.max(0, ann.width - 20)}
+						height={Math.max(0, ann.height - 16)}
+						style="pointer-events:none; overflow:hidden;"
+					>
+						<div style="font-size:{ann.fontSize}px; line-height:1.5; color:#1e293b; word-break:break-word; white-space:pre-wrap; pointer-events:none; font-family:{fontFamily};">{ann.text}</div>
+					</foreignObject>
+					{#if isSelected}
+						<g
+							role="button"
+							aria-label="Resize annotation"
+							tabindex="-1"
+							style="cursor:se-resize;"
+							onpointerdown={(e) => { e.stopPropagation(); onAnnotationResizeStart(e, ann); }}
+						>
+							<rect
+								x={ann.x + ann.width - 10} y={ann.y + ann.height - 10}
+								width="16" height="16"
+								rx="3"
+								fill="#6366f1"
+								opacity="0.85"
+							/>
+							<g
+								transform="translate({ann.x + ann.width - 10 + 3}, {ann.y + ann.height - 10 + 3}) scale({10/24})"
+								fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"
+							>
+								<path d="M15 3h6v6" />
+								<path d="m21 3-7 7" />
+								<path d="m3 21 7-7" />
+								<path d="M9 21H3v-6" />
+							</g>
+						</g>
+					{/if}
+				</g>
 			{/each}
 
 			<!-- ── Nodes ── -->
@@ -942,10 +1160,80 @@
 					{/each}
 				</div>
 			{/if}
-			<button
+			<Button
 				onclick={confirmEditNode}
-				class="mt-0.5 py-1.5 rounded-lg bg-violet-600 text-white text-xs font-medium hover:bg-violet-700 transition-colors"
-			>Done</button>
+				size="sm"
+				class="rounded-lg mt-0.5 w-full"
+			>Done</Button>
+		</div>
+	{/if}
+
+	<!-- ── Annotation style popover ── -->
+	{#if selectedAnnotation && annotationOverlayPos}
+		<div
+			role="dialog"
+			aria-label="Annotation style"
+			tabindex="-1"
+			class="absolute z-30 bg-white rounded-xl shadow-xl border border-violet-200 p-3 flex flex-col gap-2.5"
+			style="left:{annotationOverlayPos.x}px; top:{annotationOverlayPos.y}px; width:224px;"
+			onpointerdown={(e) => e.stopPropagation()}
+		>
+			<div class="flex items-center justify-between">
+				<span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Annotation</span>
+				<Button
+					variant="ghost"
+					size="icon-xs"
+					onclick={() => deleteAnnotation(selectedAnnotationId!)}
+					class="rounded hover:bg-red-50 text-slate-400 hover:text-red-500"
+				><X size={12} /></Button>
+			</div>
+			<textarea
+				value={selectedAnnotation.text}
+				oninput={(e) => {
+					if (!selectedAnnotation) return;
+					selectedAnnotation.text = (e.currentTarget as HTMLTextAreaElement).value;
+					selectedAnnotation.height = calcAnnotationHeight(selectedAnnotation.text, selectedAnnotation.fontSize, selectedAnnotation.width);
+				}}
+				class="text-sm text-slate-800 px-2 py-1.5 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-violet-200 w-full resize-none"
+				rows="3"
+				placeholder="Annotation text…"
+				onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') selectedAnnotationId = null; }}
+			></textarea>
+			<div class="flex flex-col gap-1.5">
+				<div class="flex items-center justify-between">
+					<span class="text-xs text-slate-500">Opacity</span>
+					<span class="text-xs text-slate-400 tabular-nums">{Math.round(selectedAnnotation.opacity * 100)}%</span>
+				</div>
+				<Slider
+					min={0.05} max={1} step={0.01}
+					value={[selectedAnnotation.opacity]}
+					onValueChange={(v: number[]) => { if (selectedAnnotation) selectedAnnotation.opacity = v[0]; }}
+				/>
+			</div>
+			<div class="flex items-center gap-2">
+				<span class="text-xs text-slate-500 shrink-0 w-16">Fill</span>
+				<label class="w-7 h-7 rounded-lg border border-black/10 relative overflow-hidden shrink-0 cursor-pointer" style="background:{selectedAnnotation.bgColor};">
+					<input type="color"
+						value={selectedAnnotation.bgColor}
+						oninput={(e) => { if (selectedAnnotation) selectedAnnotation.bgColor = (e.currentTarget as HTMLInputElement).value; }}
+						class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
+				</label>
+			</div>
+			<div class="flex flex-col gap-1.5">
+				<div class="flex items-center justify-between">
+					<span class="text-xs text-slate-500">Font size</span>
+					<span class="text-xs text-slate-400 tabular-nums">{selectedAnnotation.fontSize}px</span>
+				</div>
+				<Slider
+					min={8} max={32} step={1}
+					value={[selectedAnnotation.fontSize]}
+					onValueChange={(v: number[]) => {
+						if (!selectedAnnotation) return;
+						selectedAnnotation.fontSize = v[0];
+						selectedAnnotation.height = calcAnnotationHeight(selectedAnnotation.text, selectedAnnotation.fontSize, selectedAnnotation.width);
+					}}
+				/>
+			</div>
 		</div>
 	{/if}
 
@@ -995,13 +1283,15 @@
 							}}
 							placeholder="12.5"
 						/>
-						<button
+						<Button
+							variant="ghost"
+							size="icon-xs"
 							onclick={() => deleteRow(row.id)}
-							class="w-6 h-6 flex items-center justify-center rounded text-slate-300 hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 mr-1"
+							class="rounded text-slate-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 mr-1"
 							title="Delete row"
 						>
 							<X size={10} />
-						</button>
+						</Button>
 					</div>
 				{/each}
 			</div>
@@ -1019,44 +1309,26 @@
 					<span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Style</span>
 				</div>
 
-				<!-- Link opacity -->
-				<div class="px-4 pb-3 flex items-center gap-3">
-					<span class="text-xs text-slate-500 shrink-0 w-16">Label opacity</span>
-					<input
-						type="range"
-						min="0"
-						max="1"
-						step="0.01"
-						bind:value={labelBoxOpacity}
-						class="flex-1 accent-violet-600 h-1.5 cursor-pointer"
-					/>
-					<span class="text-xs text-slate-400 tabular-nums w-8 text-right">{Math.round(labelBoxOpacity * 100)}%</span>
+				<div class="px-4 pb-3 flex flex-col gap-1.5">
+					<div class="flex items-center justify-between">
+						<span class="text-xs text-slate-500">Label opacity</span>
+						<span class="text-xs text-slate-400 tabular-nums">{Math.round(labelBoxOpacity * 100)}%</span>
+					</div>
+					<Slider min={0} max={1} step={0.01} value={[labelBoxOpacity]} onValueChange={(v: number[]) => { labelBoxOpacity = v[0]; }} />
 				</div>
-				<div class="px-4 pb-3 flex items-center gap-3">
-					<span class="text-xs text-slate-500 shrink-0 w-16">Link opacity</span>
-					<input
-						type="range"
-						min="0"
-						max="1"
-						step="0.01"
-						bind:value={linkOpacity}
-						class="flex-1 accent-violet-600 h-1.5 cursor-pointer"
-					/>
-					<span class="text-xs text-slate-400 tabular-nums w-8 text-right">{Math.round(linkOpacity * 100)}%</span>
+				<div class="px-4 pb-3 flex flex-col gap-1.5">
+					<div class="flex items-center justify-between">
+						<span class="text-xs text-slate-500">Link opacity</span>
+						<span class="text-xs text-slate-400 tabular-nums">{Math.round(linkOpacity * 100)}%</span>
+					</div>
+					<Slider min={0} max={1} step={0.01} value={[linkOpacity]} onValueChange={(v: number[]) => { linkOpacity = v[0]; }} />
 				</div>
-
-				<!-- Label font size -->
-				<div class="px-4 pb-3 flex items-center gap-3">
-					<span class="text-xs text-slate-500 shrink-0 w-16">Label size</span>
-					<input
-						type="range"
-						min="8"
-						max="24"
-						step="1"
-						bind:value={labelFontSize}
-						class="flex-1 accent-violet-600 h-1.5 cursor-pointer"
-					/>
-					<span class="text-xs text-slate-400 tabular-nums w-8 text-right">{labelFontSize}px</span>
+				<div class="px-4 pb-3 flex flex-col gap-1.5">
+					<div class="flex items-center justify-between">
+						<span class="text-xs text-slate-500">Label size</span>
+						<span class="text-xs text-slate-400 tabular-nums">{labelFontSize}px</span>
+					</div>
+					<Slider min={8} max={24} step={1} value={[labelFontSize]} onValueChange={(v: number[]) => { labelFontSize = v[0]; }} />
 				</div>
 
 				<!-- Node colors -->
@@ -1103,6 +1375,7 @@
 	<div class="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 text-xs text-slate-400 pointer-events-none">
 		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">V</kbd> Select</span>
 		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">H</kbd> Hand</span>
+		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">A</kbd> Annotate</span>
 		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">Space</kbd> Pan</span>
 		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">Ctrl</kbd>+Scroll Zoom</span>
 	</div>
