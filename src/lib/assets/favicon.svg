@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Left nodes -->
+  <rect x="1" y="4" width="5" height="10" rx="1.5" fill="#6366f1"/>
+  <rect x="1" y="18" width="5" height="10" rx="1.5" fill="#818cf8"/>
+
+  <!-- Right nodes -->
+  <rect x="26" y="2" width="5" height="7" rx="1.5" fill="#06b6d4"/>
+  <rect x="26" y="13" width="5" height="7" rx="1.5" fill="#22d3ee"/>
+  <rect x="26" y="24" width="5" height="6" rx="1.5" fill="#67e8f9"/>
+
+  <!-- Flows from top-left node -->
+  <path d="M6 6 C15 6, 15 5, 26 5" stroke="#6366f1" stroke-width="4" fill="none" stroke-opacity="0.55"/>
+  <path d="M6 12 C15 12, 15 16, 26 16" stroke="#6366f1" stroke-width="3" fill="none" stroke-opacity="0.45"/>
+
+  <!-- Flows from bottom-left node -->
+  <path d="M6 20 C15 20, 15 17, 26 17" stroke="#818cf8" stroke-width="2" fill="none" stroke-opacity="0.5"/>
+  <path d="M6 26 C15 26, 15 27, 26 27" stroke="#818cf8" stroke-width="3" fill="none" stroke-opacity="0.5"/>
+</svg>
