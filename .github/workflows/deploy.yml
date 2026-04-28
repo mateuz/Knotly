@@ -1,0 +1,51 @@
+name: Deploy Knotly to GitHub Pages
+
+on:
+  push:
+    branches: 'main'
+  workflow_dispatch: # Allows manual trigger from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only allow one concurrent deployment to avoid conflicts
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build_site:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10 # Uses the latest major version of pnpm
+
+      - name: Install Node.js v24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'pnpm' # Built-in caching for pnpm store
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Upload Artifacts
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'build/'
+
+      - name: Deploy
+        uses: actions/deploy-pages@v4
