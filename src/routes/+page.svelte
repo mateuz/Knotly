@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { SvelteMap } from 'svelte/reactivity';
-	import { Type, ChevronDown, Table2, MousePointer2, Hand, X, Download, Plus, Minus } from '@lucide/svelte';
+	import { Type, ChevronDown, Table2, MousePointer2, Hand, X, Download, Plus, Minus, Maximize2 } from '@lucide/svelte';
 	import faviconSvg from '$lib/assets/favicon.svg?raw';
 
 	type Tool = 'select' | 'hand';
@@ -671,7 +671,7 @@
 	<header class="absolute inset-x-0 top-0 h-12 bg-white border-b border-slate-200 flex items-center px-4 z-20 gap-3">
 		<div class="flex items-center gap-2 shrink-0">
 			<div style="width:22px;height:22px;flex-shrink:0;" class="[&>svg]:size-full">{@html faviconSvg}</div>
-			<span class="font-semibold text-slate-800 text-sm tracking-tight">Sankey Editor</span>
+			<span class="font-semibold text-slate-800 text-sm tracking-tight">Knotly</span>
 		</div>
 
 		<div class="w-px h-5 bg-slate-200 shrink-0"></div>
@@ -1093,6 +1093,10 @@
 		<button class="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:bg-slate-100 text-base leading-none" onclick={() => zoomBy(0.9)} title="Zoom out">−</button>
 		<button class="text-xs font-medium text-slate-600 w-14 text-center hover:bg-slate-100 rounded px-1 py-0.5 tabular-nums" onclick={resetView} title="Reset view (Ctrl+0)">{Math.round(zoom * 100)}%</button>
 		<button class="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:bg-slate-100 text-base leading-none" onclick={() => zoomBy(1 / 0.9)} title="Zoom in">+</button>
+		<div class="w-px h-4 bg-slate-200 mx-0.5"></div>
+		<button class="w-7 h-7 flex items-center justify-center rounded text-slate-500 hover:bg-slate-100" onclick={centerDiagram} title="Fit to window">
+			<Maximize2 size={14} />
+		</button>
 	</div>
 
 	<!-- ── Keyboard hints ── -->
