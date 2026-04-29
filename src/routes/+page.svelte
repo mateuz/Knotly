@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { SvelteMap } from 'svelte/reactivity';
 	import { tick } from 'svelte';
-	import { Type, ChevronDown, Table2, MousePointer2, Hand, X, Download, Plus, Minus, Maximize2, MessageSquare, Check, ChevronsUpDown, Sparkles } from '@lucide/svelte';
+	import { Type, ChevronDown, Table2, MousePointer2, Hand, X, Download, Plus, Minus, Maximize2, MessageSquare, Check, ChevronsUpDown, Sparkles, Save, FolderOpen } from '@lucide/svelte';
 	import faviconSvg from '$lib/assets/favicon.svg?raw';
 	import { Button } from '$lib/components/ui/button';
 	import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '$lib/components/ui/dropdown-menu';
@@ -85,6 +85,7 @@
 	let editorOpen = $state(true);
 	let nextId = $state(6);
 	let svgEl = $state<SVGSVGElement | null>(null);
+	let fileInputEl = $state<HTMLInputElement | null>(null);
 	let linkOpacity = $state(0.22);
 	let labelBoxOpacity = $state(1);
 	let labelFontSize = $state(12);
@@ -865,9 +866,72 @@ function growParentBudget(nodeName: string, needed: number) {
 		a.download = 'sankey-diagram.png';
 		a.click();
 	}
+
+	function saveProject() {
+		const state = {
+			version: 1,
+			rows,
+			nodeColors: Object.fromEntries(nodeColors),
+			manualPositions: Object.fromEntries(manualPositions),
+			annotations,
+			nextId,
+			annotationNextId,
+			linkOpacity,
+			labelBoxOpacity,
+			labelFontSize,
+			amountPrefix,
+			comparisonSuffix,
+			selectedFont,
+		};
+		const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = 'sankey-project.json';
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
+	function loadProject(file: File) {
+		const reader = new FileReader();
+		reader.onload = (e) => {
+			try {
+				const s = JSON.parse(e.target!.result as string);
+				rows.splice(0, rows.length, ...(s.rows ?? []));
+				nodeColors.clear();
+				for (const [k, v] of Object.entries(s.nodeColors ?? {})) nodeColors.set(k, v as string);
+				manualPositions.clear();
+				for (const [k, v] of Object.entries(s.manualPositions ?? {})) manualPositions.set(k, v as { x: number; y: number });
+				annotations.splice(0, annotations.length, ...(s.annotations ?? []));
+				nextId = s.nextId ?? rows.length + 1;
+				annotationNextId = s.annotationNextId ?? 1;
+				linkOpacity = s.linkOpacity ?? 0.22;
+				labelBoxOpacity = s.labelBoxOpacity ?? 1;
+				labelFontSize = s.labelFontSize ?? 12;
+				amountPrefix = s.amountPrefix ?? '$';
+				comparisonSuffix = s.comparisonSuffix ?? '% QoQ';
+				selectedFont = s.selectedFont ?? 'Fira Sans';
+				tick().then(() => centerDiagram());
+			} catch {
+				// invalid file — silently ignore
+			}
+		};
+		reader.readAsText(file);
+	}
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} />
+<input
+	bind:this={fileInputEl}
+	type="file"
+	accept=".json"
+	class="hidden"
+	onchange={(e) => {
+		const file = (e.currentTarget as HTMLInputElement).files?.[0];
+		if (file) loadProject(file);
+		(e.currentTarget as HTMLInputElement).value = '';
+	}}
+/>
 
 <div class="w-screen h-screen overflow-hidden bg-slate-50 select-none relative">
 
@@ -926,7 +990,34 @@ function growParentBudget(nodeName: string, needed: number) {
 
 		<div class="flex-1"></div>
 
-		<!-- Download -->
+		<!-- Project save/load -->
+		<DropdownMenu>
+			<DropdownMenuTrigger>
+				{#snippet child({ props }: { props: Record<string, unknown> })}
+					<Button
+						variant="outline"
+						size="sm"
+						class="rounded-lg shrink-0"
+						title="Save / Load project"
+						{...props}
+					>
+						<Save size={14} />
+						<span>Project</span>
+						<ChevronDown size={10} class="text-slate-400" />
+					</Button>
+				{/snippet}
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" class="w-40">
+				<DropdownMenuItem onclick={saveProject}>
+					<Save size={13} />Save project
+				</DropdownMenuItem>
+				<DropdownMenuItem onclick={() => fileInputEl?.click()}>
+					<FolderOpen size={13} />Load project
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
+
+		<!-- Export -->
 		<DropdownMenu>
 			<DropdownMenuTrigger>
 				{#snippet child({ props }: { props: Record<string, unknown> })}
