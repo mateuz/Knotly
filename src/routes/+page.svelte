@@ -254,7 +254,11 @@
 		const positions = new SvelteMap<string, ComputedNode>();
 
 		for (const [col, names] of colGroups) {
-			names.sort();
+			names.sort((a, b) => {
+				const ta = Math.max(nodeData.get(a)!.totalIn, nodeData.get(a)!.totalOut);
+				const tb = Math.max(nodeData.get(b)!.totalIn, nodeData.get(b)!.totalOut);
+				return tb - ta;
+			});
 			const defaultX = COL_X0 + col * COL_GAP;
 			const totalH =
 				names.reduce(
