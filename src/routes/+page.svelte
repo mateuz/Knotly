@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { SvelteMap } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { tick } from 'svelte';
 	import { Type, ChevronDown, Table2, MousePointer2, Hand, X, Download, Plus, Minus, Maximize2, MessageSquare, Check, ChevronsUpDown, Sparkles, Save, FolderOpen } from '@lucide/svelte';
 	import faviconSvg from '$lib/assets/favicon.svg?raw';
@@ -109,11 +109,18 @@
 	let resizeStartH = 0;
 	let hoveredAnnotationId = $state<string | null>(null);
 
-	// Node drag
+	// Node drag / multi-select
 	let manualPositions = new SvelteMap<string, { x: number; y: number }>();
+	let selectedNodes = new SvelteSet<string>();
 	let draggingNode = $state<string | null>(null);
 	let dragNodeOffsetX = 0;
 	let dragNodeOffsetY = 0;
+	let dragNodeStartPositions = new Map<string, { x: number; y: number }>();
+	let isRubberBanding = $state(false);
+	let rubberBandStartX = $state(0);
+	let rubberBandStartY = $state(0);
+	let rubberBandEndX = $state(0);
+	let rubberBandEndY = $state(0);
 	let hoveredNode = $state<string | null>(null);
 	let hoveredHandle = $state<string | null>(null);
 	let hoveredRemoveHandle = $state<string | null>(null);
@@ -423,6 +430,7 @@
 		}
 		manualPositions.delete(name);
 		nodeColors.delete(name);
+		selectedNodes.delete(name);
 		if (editingNode === name) editingNode = null;
 	}
 
@@ -519,16 +527,41 @@
 				return;
 			}
 
-			// Node drag
+			// Node drag / selection
 			const hit = hitTestNode(cx, cy);
 			if (hit) {
+				if (e.ctrlKey || e.metaKey) {
+					if (selectedNodes.has(hit.name)) selectedNodes.delete(hit.name);
+					else selectedNodes.add(hit.name);
+					e.preventDefault();
+					return;
+				}
+				if (!selectedNodes.has(hit.name)) {
+					selectedNodes.clear();
+					selectedNodes.add(hit.name);
+				}
 				draggingNode = hit.name;
-				dragNodeOffsetX = cx - hit.x;
-				dragNodeOffsetY = cy - hit.y;
+				dragNodeOffsetX = cx;
+				dragNodeOffsetY = cy;
+				dragNodeStartPositions.clear();
+				for (const name of selectedNodes) {
+					const node = layout.nodes.find(n => n.name === name);
+					if (node) dragNodeStartPositions.set(name, { x: node.x, y: node.y });
+				}
 				svg.setPointerCapture(e.pointerId);
 				e.preventDefault();
 				return;
 			}
+
+			// Rubber band selection on empty canvas
+			if (!e.ctrlKey && !e.metaKey) selectedNodes.clear();
+			isRubberBanding = true;
+			rubberBandStartX = cx;
+			rubberBandStartY = cy;
+			rubberBandEndX = cx;
+			rubberBandEndY = cy;
+			svg.setPointerCapture(e.pointerId);
+			e.preventDefault();
 		}
 
 		// Canvas pan
@@ -570,10 +603,17 @@
 		}
 
 		if (draggingNode !== null) {
-			manualPositions.set(draggingNode, {
-				x: cx - dragNodeOffsetX,
-				y: cy - dragNodeOffsetY,
-			});
+			const dx = cx - dragNodeOffsetX;
+			const dy = cy - dragNodeOffsetY;
+			for (const [name, start] of dragNodeStartPositions) {
+				manualPositions.set(name, { x: start.x + dx, y: start.y + dy });
+			}
+			return;
+		}
+
+		if (isRubberBanding) {
+			rubberBandEndX = cx;
+			rubberBandEndY = cy;
 			return;
 		}
 
@@ -609,6 +649,22 @@
 			}
 			return;
 		}
+		if (isRubberBanding) {
+			isRubberBanding = false;
+			const rx = Math.min(rubberBandStartX, rubberBandEndX);
+			const ry = Math.min(rubberBandStartY, rubberBandEndY);
+			const rw = Math.abs(rubberBandEndX - rubberBandStartX);
+			const rh = Math.abs(rubberBandEndY - rubberBandStartY);
+			if (rw > 4 || rh > 4) {
+				for (const node of layout.nodes) {
+					if (node.x < rx + rw && node.x + NODE_W > rx &&
+						node.y < ry + rh && node.y + node.height > ry) {
+						selectedNodes.add(node.name);
+					}
+				}
+			}
+			return;
+		}
 		draggingNode = null;
 		draggingAnnotationId = null;
 		resizingAnnotationId = null;
@@ -625,7 +681,7 @@
 		if (e.code === 'Space' && !e.repeat) { spaceHeld = true; e.preventDefault(); }
 		if (e.key === 'h') activeTool = 'hand';
 		if (e.key === 'a' && !e.ctrlKey && !e.metaKey) activeTool = 'annotation';
-		if (e.key === 'v' || e.key === 'Escape') { activeTool = 'select'; connectingFrom = null; selectedAnnotationId = null; }
+		if (e.key === 'v' || e.key === 'Escape') { activeTool = 'select'; connectingFrom = null; selectedAnnotationId = null; selectedNodes.clear(); }
 		if ((e.ctrlKey || e.metaKey) && e.key === '0') centerDiagram();
 		if (e.key === 'o' && !e.ctrlKey && !e.metaKey) autoOrganize();
 	}
@@ -1205,7 +1261,8 @@ function growParentBudget(nodeName: string, needed: number) {
 
 			<!-- ── Nodes ── -->
 			{#each layout.nodes as node (node.name)}
-				{@const isDragging = draggingNode === node.name}
+				{@const isSelected = selectedNodes.has(node.name)}
+				{@const isDragging = draggingNode !== null && isSelected}
 				{@const isHovered = hoveredNode === node.name && !isDragging}
 				{@const LBL_LINE_H = Math.round(labelFontSize * 1.25)}
 				{@const LBL_FIRST_Y = Math.round(labelFontSize * 1.33)}
@@ -1224,9 +1281,9 @@ function growParentBudget(nodeName: string, needed: number) {
 					rx="3"
 					fill={node.color}
 					filter={isDragging ? 'url(#node-lift)' : ''}
-					stroke={connectTarget === node.name ? 'white' : isHovered ? 'white' : 'none'}
-					stroke-width={connectTarget === node.name ? 3 : 2.5}
-					stroke-opacity="0.7"
+					stroke={connectTarget === node.name ? 'white' : isSelected ? '#818cf8' : isHovered ? 'white' : 'none'}
+					stroke-width={connectTarget === node.name ? 3 : isSelected ? 2.5 : 2.5}
+					stroke-opacity={connectTarget === node.name || isHovered ? 0.7 : 1}
 				/>
 
 				<!-- Connection handle (top) -->
@@ -1289,6 +1346,22 @@ function growParentBudget(nodeName: string, needed: number) {
 						</g>
 					{/if}
 				{/if}
+			{/if}
+
+			<!-- ── Rubber band ── -->
+			{#if isRubberBanding}
+				{@const rx = Math.min(rubberBandStartX, rubberBandEndX)}
+				{@const ry = Math.min(rubberBandStartY, rubberBandEndY)}
+				{@const rw = Math.abs(rubberBandEndX - rubberBandStartX)}
+				{@const rh = Math.abs(rubberBandEndY - rubberBandStartY)}
+				<rect
+					x={rx} y={ry} width={rw} height={rh}
+					fill="rgba(129,140,248,0.08)"
+					stroke="#818cf8"
+					stroke-width={1 / zoom}
+					stroke-dasharray="{5 / zoom} {3 / zoom}"
+					pointer-events="none"
+				/>
 			{/if}
 
 		</g>
