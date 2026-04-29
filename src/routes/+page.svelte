@@ -41,6 +41,7 @@
 		color: string;
 		total: number;
 		comparison: number | null;
+		pct: number | null;
 	};
 
 	type ComputedLink = {
@@ -91,6 +92,7 @@
 	let labelFontSize = $state(12);
 	let amountPrefix = $state('$');
 	let comparisonSuffix = $state('% QoQ');
+	let showNodePct = $state(false);
 	let editingNode = $state<string | null>(null);
 	let editNodeName = $state('');
 	let nodeColors = new SvelteMap<string, string>();
@@ -301,6 +303,13 @@
 				const height = Math.max(nd.totalIn, nd.totalOut) * scale;
 				const color = colorOverrides.get(name) ?? COLORS[allNames.indexOf(name) % COLORS.length];
 				const override = overrides.get(name);
+				const parents = [...new Set(valid.filter(r => r.to === name).map(r => r.from))];
+				let pct: number | null = null;
+				if (parents.length === 1) {
+					const p = nodeData.get(parents[0])!;
+					const parentTotal = Math.max(p.totalIn, p.totalOut);
+					if (parentTotal > 0) pct = nd.totalIn / parentTotal;
+				}
 				positions.set(name, {
 					name,
 					col,
@@ -310,6 +319,7 @@
 					color,
 					total: Math.max(nd.totalIn, nd.totalOut),
 					comparison: nodeComparisons.get(name) ?? null,
+					pct,
 				});
 				computedY += height + NODE_GAP;
 			}
@@ -972,6 +982,7 @@ function adjustBudgetForRow(row: Row) {
 			amountPrefix,
 			comparisonSuffix,
 			selectedFont,
+			showNodePct,
 		};
 		const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
 		const url = URL.createObjectURL(blob);
@@ -1001,6 +1012,7 @@ function adjustBudgetForRow(row: Row) {
 				amountPrefix = s.amountPrefix ?? '$';
 				comparisonSuffix = s.comparisonSuffix ?? '% QoQ';
 				selectedFont = s.selectedFont ?? 'Fira Sans';
+				showNodePct = s.showNodePct ?? false;
 				tick().then(() => centerDiagram());
 			} catch {
 				// invalid file — silently ignore
@@ -1343,7 +1355,9 @@ function adjustBudgetForRow(row: Row) {
 						stroke-opacity="0.35"
 						filter="url(#label-shadow)"
 					/>
-					<text x={bx + 10} y={by + LBL_FIRST_Y} font-size={labelFontSize} font-weight="700" fill="#1e293b">{node.name}</text>
+					<text y={by + LBL_FIRST_Y} font-size={labelFontSize} font-weight="700" fill="#1e293b">
+						<tspan x={bx + 10}>{node.name}</tspan>{#if showNodePct && node.pct !== null}<tspan font-size={labelFontSize - 2} font-weight="400" fill="#94a3b8" dx="5">{Math.round(node.pct * 100)}%</tspan>{/if}
+					</text>
 					<text x={bx + 10} y={by + LBL_FIRST_Y + LBL_LINE_H} font-size={labelFontSize - 1} fill="#64748b">{fmtAmount(node.total)}</text>
 					{#if node.comparison !== null}
 						<text
@@ -1642,6 +1656,16 @@ function adjustBudgetForRow(row: Row) {
 						<span class="text-xs text-slate-400 tabular-nums">{labelFontSize}px</span>
 					</div>
 					<Slider type="multiple" min={8} max={24} step={1} value={[labelFontSize]} onValueChange={(v: number[]) => { labelFontSize = v[0]; }} />
+				</div>
+				<div class="px-4 pb-3 flex items-center justify-between gap-3">
+					<span class="text-xs text-slate-500 shrink-0">Show % on nodes</span>
+					<button
+						onclick={() => showNodePct = !showNodePct}
+						aria-label="Toggle percentage on nodes"
+						class="w-8 h-4 rounded-full transition-colors relative shrink-0 {showNodePct ? 'bg-violet-500' : 'bg-slate-200'}"
+					>
+						<span class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all {showNodePct ? 'left-4' : 'left-0.5'}"></span>
+					</button>
 				</div>
 				<div class="px-4 pb-3 flex items-center justify-between gap-3">
 					<span class="text-xs text-slate-500 shrink-0">Amount prefix</span>
