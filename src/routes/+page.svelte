@@ -88,6 +88,8 @@
 	let linkOpacity = $state(0.22);
 	let labelBoxOpacity = $state(1);
 	let labelFontSize = $state(12);
+	let amountPrefix = $state('$');
+	let comparisonSuffix = $state('% QoQ');
 	let editingNode = $state<string | null>(null);
 	let editNodeName = $state('');
 	let nodeColors = new SvelteMap<string, string>();
@@ -700,14 +702,15 @@
 	}
 
 	function fmtAmount(v: number): string {
-		if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
-		if (v >= 1_000) return `$ ${(v / 1_000).toFixed(1)}K`;
-		return `$${v.toFixed(0)}`;
+		const p = amountPrefix;
+		if (v >= 1_000_000) return `${p}${(v / 1_000_000).toFixed(1)}M`;
+		if (v >= 1_000) return `${p}${(v / 1_000).toFixed(1)}K`;
+		return `${p}${v.toFixed(0)}`;
 	}
 
 	function fmtNodeCmp(v: number): string {
 		const sign = v > 0 ? '+' : '';
-		return `${sign}${v.toFixed(1)}% Y/Y`;
+		return `${sign}${v.toFixed(1)}${comparisonSuffix}`;
 	}
 
 	// ── Export ───────────────────────────────────────────────────────────────────
@@ -1330,6 +1333,28 @@
 						<span class="text-xs text-slate-400 tabular-nums">{labelFontSize}px</span>
 					</div>
 					<Slider type="multiple" min={8} max={24} step={1} value={[labelFontSize]} onValueChange={(v: number[]) => { labelFontSize = v[0]; }} />
+				</div>
+				<div class="px-4 pb-3 flex items-center justify-between gap-3">
+					<span class="text-xs text-slate-500 shrink-0">Amount prefix</span>
+					<input
+						type="text"
+						value={amountPrefix}
+						oninput={(e) => { amountPrefix = (e.currentTarget as HTMLInputElement).value; }}
+						onkeydown={(e) => e.stopPropagation()}
+						maxlength="4"
+						class="w-16 text-xs text-right text-slate-700 px-2 py-1 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-violet-200"
+					/>
+				</div>
+				<div class="px-4 pb-3 flex items-center justify-between gap-3">
+					<span class="text-xs text-slate-500 shrink-0">Comparison suffix</span>
+					<input
+						type="text"
+						value={comparisonSuffix}
+						oninput={(e) => { comparisonSuffix = (e.currentTarget as HTMLInputElement).value; }}
+						onkeydown={(e) => e.stopPropagation()}
+						maxlength="8"
+						class="w-20 text-xs text-right text-slate-700 px-2 py-1 rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-violet-200"
+					/>
 				</div>
 
 				<!-- Node colors -->
