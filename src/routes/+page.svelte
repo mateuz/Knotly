@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { SvelteMap } from 'svelte/reactivity';
 	import { tick } from 'svelte';
-	import { Type, ChevronDown, Table2, MousePointer2, Hand, X, Download, Plus, Minus, Maximize2, MessageSquare, Check, ChevronsUpDown } from '@lucide/svelte';
+	import { Type, ChevronDown, Table2, MousePointer2, Hand, X, Download, Plus, Minus, Maximize2, MessageSquare, Check, ChevronsUpDown, Sparkles } from '@lucide/svelte';
 	import faviconSvg from '$lib/assets/favicon.svg?raw';
 	import { Button } from '$lib/components/ui/button';
 	import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '$lib/components/ui/dropdown-menu';
@@ -69,7 +69,7 @@
 	const NODE_W = 20;
 	const COL_X0 = 155;
 	const COL_GAP = 240;
-	const NODE_GAP = 24;
+	const NODE_GAP = 36;
 	const MAX_H = 350;
 
 	// ── State ───────────────────────────────────────────────────────────────────
@@ -176,6 +176,8 @@
 	let layout = $derived(computeSankey(rows, manualPositions, nodeColors));
 	let editNodeLayout = $derived(editingNode ? (layout.nodes.find(n => n.name === editingNode) ?? null) : null);
 	let editNodeRows = $derived(editingNode ? rows.filter(r => r.from === editingNode || r.to === editingNode) : []);
+	let editNodeIncoming = $derived(editNodeRows.reduce((s, r) => r.to === editingNode ? s + (r.amount || 0) : s, 0));
+	let editNodeOutgoing = $derived(editNodeRows.reduce((s, r) => r.from === editingNode ? s + (r.amount || 0) : s, 0));
 	let editOverlayPos = $derived((() => {
 		const node = editNodeLayout;
 		if (!node) return null;
@@ -280,13 +282,22 @@
 			}
 		}
 
+		// Sort links by (source Y, target Y) so stacking order matches visual node order,
+		// eliminating crossings regardless of the order rows were added.
+		const linkedByPosition = [...valid].sort((a, b) => {
+			const fa = positions.get(a.from)!;
+			const fb = positions.get(b.from)!;
+			if (fa.y !== fb.y) return fa.y - fb.y;
+			return positions.get(a.to)!.y - positions.get(b.to)!.y;
+		});
+
 		// Link paths with vertical stacking at each node
 		const usedOut = new SvelteMap<string, number>();
 		const usedIn = new SvelteMap<string, number>();
 		for (const name of nodeData.keys()) { usedOut.set(name, 0); usedIn.set(name, 0); }
 
 		const links: ComputedLink[] = [];
-		for (const r of valid) {
+		for (const r of linkedByPosition) {
 			const fp = positions.get(r.from);
 			const tp = positions.get(r.to);
 			if (!fp || !tp) continue;
@@ -413,6 +424,24 @@
 	// Convert screen coords → canvas (world) coords
 	function toCanvas(clientX: number, clientY: number) {
 		return { x: (clientX - panX) / zoom, y: (clientY - panY) / zoom };
+	}
+
+	function maxOutgoing(rowId: string): number {
+		if (editNodeIncoming === 0) return Infinity;
+		const otherOut = editNodeRows.reduce((s, r) =>
+			r.from === editingNode && r.id !== rowId ? s + (r.amount || 0) : s, 0);
+		return Math.max(0, editNodeIncoming - otherOut);
+	}
+
+	function maxIncoming(rowId: string): number {
+		const row = rows.find(r => r.id === rowId);
+		if (!row) return Infinity;
+		const parentName = row.from;
+		const parentTotalIn = rows.reduce((s, r) => r.to === parentName ? s + (r.amount || 0) : s, 0);
+		if (parentTotalIn === 0) return Infinity;
+		const parentOtherOut = rows.reduce((s, r) =>
+			r.from === parentName && r.id !== rowId ? s + (r.amount || 0) : s, 0);
+		return Math.max(0, parentTotalIn - parentOtherOut);
 	}
 
 	function closeAndFocusFontTrigger() {
@@ -561,19 +590,17 @@
 		if (connectingFrom !== null) {
 			const from = connectingFrom;
 			const target = connectTarget;
-			const gx = connectGhostX;
-			const gy = connectGhostY;
 			connectingFrom = null;
 			connectTarget = null;
 
 			if (target) {
-				rows.push({ id: String(nextId++), from, to: target, amount: 1000, comparison: null });
+				addLink(from, target);
 				startEditNode(target);
 			} else {
 				const newName = generateNodeName();
-				manualPositions.set(newName, { x: gx - NODE_W / 2, y: gy - 20 });
-				rows.push({ id: String(nextId++), from, to: newName, amount: 1000, comparison: null });
+				addLink(from, newName);
 				startEditNode(newName);
+				tick().then(() => panToNode(newName));
 			}
 			return;
 		}
@@ -595,6 +622,7 @@
 		if (e.key === 'a' && !e.ctrlKey && !e.metaKey) activeTool = 'annotation';
 		if (e.key === 'v' || e.key === 'Escape') { activeTool = 'select'; connectingFrom = null; selectedAnnotationId = null; }
 		if ((e.ctrlKey || e.metaKey) && e.key === '0') centerDiagram();
+		if (e.key === 'o' && !e.ctrlKey && !e.metaKey) autoOrganize();
 	}
 
 	function onKeyUp(e: KeyboardEvent) {
@@ -673,6 +701,53 @@
 		let i = 1;
 		while (existing.has(`Node ${i}`)) i++;
 		return `Node ${i}`;
+	}
+
+function growParentBudget(nodeName: string, needed: number) {
+		const incomingRows = rows.filter(r => r.to === nodeName);
+		if (incomingRows.length === 0) return;
+		const totalIn = incomingRows.reduce((s, r) => s + (r.amount || 0), 0);
+		for (const r of incomingRows) {
+			const increase = totalIn > 0
+				? Math.max(1, Math.round(needed * r.amount / totalIn))
+				: Math.ceil(needed / incomingRows.length);
+			r.amount += increase;
+			growParentBudget(r.from, increase);
+		}
+	}
+
+	function addLink(from: string, to: string) {
+		const totalIn = rows.reduce((s, r) => r.to === from ? s + (r.amount || 0) : s, 0);
+		if (totalIn === 0) {
+			rows.push({ id: String(nextId++), from, to, amount: 1000, comparison: null });
+			return;
+		}
+		const totalOut = rows.reduce((s, r) => r.from === from ? s + (r.amount || 0) : s, 0);
+		const remaining = Math.max(0, totalIn - totalOut);
+		if (remaining > 0) {
+			rows.push({ id: String(nextId++), from, to, amount: remaining, comparison: null });
+			return;
+		}
+		const amount = 1000;
+		growParentBudget(from, amount);
+		rows.push({ id: String(nextId++), from, to, amount, comparison: null });
+	}
+
+
+	function autoOrganize() {
+		manualPositions.clear();
+		tick().then(() => centerDiagram());
+	}
+
+	function panToNode(name: string) {
+		const node = layout.nodes.find(n => n.name === name);
+		if (!node) return;
+		const HEADER_H = 48;
+		const EDITOR_W = editorOpen ? 320 : 0;
+		const cx = node.x + NODE_W / 2;
+		const cy = node.y + node.height / 2;
+		panX = (window.innerWidth - EDITOR_W) / 2 - cx * zoom;
+		panY = HEADER_H + (window.innerHeight - HEADER_H) / 2 - cy * zoom;
 	}
 
 	function startEditNode(name: string) {
@@ -917,6 +992,16 @@
 		>
 			<MessageSquare size={15} />
 		</Button>
+		<div class="w-full h-px bg-slate-100 my-0.5"></div>
+		<Button
+			variant="ghost"
+			size="icon"
+			onclick={autoOrganize}
+			class="rounded-lg text-slate-500"
+			title="Auto-organize (O)"
+		>
+			<Sparkles size={15} />
+		</Button>
 	</aside>
 
 	<!-- ── Canvas SVG ── -->
@@ -1139,15 +1224,30 @@
 						<span>Flow</span><span>Amount</span><span>vs %</span>
 					</div>
 					{#each editNodeRows as row (row.id)}
+						{@const isOutgoing = row.from === editingNode}
+						{@const max = isOutgoing ? maxOutgoing(row.id) : maxIncoming(row.id)}
+						{@const overBudget = row.amount > max}
 						<div class="grid gap-1 items-center" style="grid-template-columns: 1fr 72px 52px;">
 							<span class="text-xs text-slate-500 truncate">
-								{row.from === editingNode ? `→ ${row.to}` : `← ${row.from}`}
+								{isOutgoing ? `→ ${row.to}` : `← ${row.from}`}
 							</span>
 							<input
 								type="number"
-								bind:value={row.amount}
+								value={row.amount}
 								min="0"
-								class="text-xs px-1.5 py-1 rounded border border-slate-200 outline-none focus:border-violet-300 w-full"
+								max={max === Infinity ? undefined : max}
+								class="text-xs px-1.5 py-1 rounded border outline-none w-full {overBudget ? 'border-red-300 bg-red-50 focus:border-red-400' : 'border-slate-200 focus:border-violet-300'}"
+								oninput={(e) => {
+									const raw = parseFloat((e.currentTarget as HTMLInputElement).value);
+									if (isNaN(raw) || raw < 0) { row.amount = 0; return; }
+									if (max < Infinity) {
+										const clamped = Math.min(raw, max);
+										row.amount = clamped;
+										if (raw > max) (e.currentTarget as HTMLInputElement).value = String(clamped);
+									} else {
+										row.amount = raw;
+									}
+								}}
 								onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') confirmEditNode(); if (e.key === 'Escape') editingNode = null; }}
 							/>
 							<input
@@ -1160,6 +1260,16 @@
 							/>
 						</div>
 					{/each}
+					{#if editNodeIncoming > 0}
+						<div class="flex items-center justify-between pt-1 border-t border-slate-100">
+							<span class="text-xs text-slate-400">Budget</span>
+							<span class="text-xs tabular-nums {editNodeOutgoing > editNodeIncoming ? 'text-red-500 font-medium' : 'text-slate-400'}">
+								{editNodeOutgoing > editNodeIncoming
+									? `${editNodeOutgoing - editNodeIncoming} over`
+									: `${editNodeIncoming - editNodeOutgoing} remaining`}
+							</span>
+						</div>
+					{/if}
 				</div>
 			{/if}
 			<Button
@@ -1401,6 +1511,7 @@
 		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">V</kbd> Select</span>
 		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">H</kbd> Hand</span>
 		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">A</kbd> Annotate</span>
+		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">O</kbd> Organize</span>
 		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">Space</kbd> Pan</span>
 		<span><kbd class="bg-slate-100 border border-slate-200 px-1 rounded text-slate-500">Ctrl</kbd>+Scroll Zoom</span>
 	</div>
