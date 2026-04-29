@@ -702,10 +702,9 @@
 	}
 
 	function fmtAmount(v: number): string {
-		const p = amountPrefix;
-		if (v >= 1_000_000) return `${p}${(v / 1_000_000).toFixed(1)}M`;
-		if (v >= 1_000) return `${p}${(v / 1_000).toFixed(1)}K`;
-		return `${p}${v.toFixed(0)}`;
+		if (v >= 1_000_000) return `${amountPrefix}${(v / 1_000_000).toFixed(1)}M`;
+		if (v >= 1_000) return `${amountPrefix} ${(v / 1_000).toFixed(1)}K`;
+		return `${amountPrefix}${v.toFixed(0)}`;
 	}
 
 	function fmtNodeCmp(v: number): string {
