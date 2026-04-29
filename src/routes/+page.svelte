@@ -279,7 +279,13 @@
 					}
 					return wtot > 0 ? wsum / wtot : 0;
 				};
-				names.sort((a, b) => bc(a) - bc(b));
+				names.sort((a, b) => {
+					const diff = bc(a) - bc(b);
+					if (diff !== 0) return diff;
+					const ta = Math.max(nodeData.get(a)!.totalIn, nodeData.get(a)!.totalOut);
+					const tb = Math.max(nodeData.get(b)!.totalIn, nodeData.get(b)!.totalOut);
+					return tb - ta;
+				});
 			}
 			const defaultX = COL_X0 + col * COL_GAP;
 			const totalH =
