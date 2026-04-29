@@ -1176,7 +1176,6 @@
 			tabindex="-1"
 			class="absolute z-30 bg-white rounded-xl shadow-xl border border-violet-200 p-3 flex flex-col gap-2.5"
 			style="left:{annotationOverlayPos.x}px; top:{annotationOverlayPos.y}px; width:224px;"
-			onpointerdown={(e) => e.stopPropagation()}
 		>
 			<div class="flex items-center justify-between">
 				<span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Annotation</span>
@@ -1205,6 +1204,7 @@
 					<span class="text-xs text-slate-400 tabular-nums">{Math.round(selectedAnnotation.opacity * 100)}%</span>
 				</div>
 				<Slider
+					type="multiple"
 					min={0.05} max={1} step={0.01}
 					value={[selectedAnnotation.opacity]}
 					onValueChange={(v: number[]) => { if (selectedAnnotation) selectedAnnotation.opacity = v[0]; }}
@@ -1225,6 +1225,7 @@
 					<span class="text-xs text-slate-400 tabular-nums">{selectedAnnotation.fontSize}px</span>
 				</div>
 				<Slider
+					type="multiple"
 					min={8} max={32} step={1}
 					value={[selectedAnnotation.fontSize]}
 					onValueChange={(v: number[]) => {
@@ -1314,21 +1315,21 @@
 						<span class="text-xs text-slate-500">Label opacity</span>
 						<span class="text-xs text-slate-400 tabular-nums">{Math.round(labelBoxOpacity * 100)}%</span>
 					</div>
-					<Slider min={0} max={1} step={0.01} value={[labelBoxOpacity]} onValueChange={(v: number[]) => { labelBoxOpacity = v[0]; }} />
+					<Slider type="multiple" min={0} max={1} step={0.01} value={[labelBoxOpacity]} onValueChange={(v: number[]) => { labelBoxOpacity = v[0]; }} />
 				</div>
 				<div class="px-4 pb-3 flex flex-col gap-1.5">
 					<div class="flex items-center justify-between">
 						<span class="text-xs text-slate-500">Link opacity</span>
 						<span class="text-xs text-slate-400 tabular-nums">{Math.round(linkOpacity * 100)}%</span>
 					</div>
-					<Slider min={0} max={1} step={0.01} value={[linkOpacity]} onValueChange={(v: number[]) => { linkOpacity = v[0]; }} />
+					<Slider type="multiple" min={0} max={1} step={0.01} value={[linkOpacity]} onValueChange={(v: number[]) => { linkOpacity = v[0]; }} />
 				</div>
 				<div class="px-4 pb-3 flex flex-col gap-1.5">
 					<div class="flex items-center justify-between">
 						<span class="text-xs text-slate-500">Label size</span>
 						<span class="text-xs text-slate-400 tabular-nums">{labelFontSize}px</span>
 					</div>
-					<Slider min={8} max={24} step={1} value={[labelFontSize]} onValueChange={(v: number[]) => { labelFontSize = v[0]; }} />
+					<Slider type="multiple" min={8} max={24} step={1} value={[labelFontSize]} onValueChange={(v: number[]) => { labelFontSize = v[0]; }} />
 				</div>
 
 				<!-- Node colors -->
