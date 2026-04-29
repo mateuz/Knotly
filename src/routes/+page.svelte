@@ -260,12 +260,27 @@
 
 		const positions = new SvelteMap<string, ComputedNode>();
 
-		for (const [col, names] of colGroups) {
-			names.sort((a, b) => {
-				const ta = Math.max(nodeData.get(a)!.totalIn, nodeData.get(a)!.totalOut);
-				const tb = Math.max(nodeData.get(b)!.totalIn, nodeData.get(b)!.totalOut);
-				return tb - ta;
-			});
+		for (const [col, names] of [...colGroups.entries()].sort(([a], [b]) => a - b)) {
+			if (col === 0) {
+				names.sort((a, b) => {
+					const ta = Math.max(nodeData.get(a)!.totalIn, nodeData.get(a)!.totalOut);
+					const tb = Math.max(nodeData.get(b)!.totalIn, nodeData.get(b)!.totalOut);
+					return tb - ta;
+				});
+			} else {
+				// Barycenter sort: position each node near the weighted-average Y of its parents
+				const bc = (name: string) => {
+					const inc = valid.filter(r => r.to === name);
+					if (inc.length === 0) return 0;
+					let wsum = 0, wtot = 0;
+					for (const r of inc) {
+						const src = positions.get(r.from);
+						if (src) { wsum += r.amount * (src.y + src.height / 2); wtot += r.amount; }
+					}
+					return wtot > 0 ? wsum / wtot : 0;
+				};
+				names.sort((a, b) => bc(a) - bc(b));
+			}
 			const defaultX = COL_X0 + col * COL_GAP;
 			const totalH =
 				names.reduce(
