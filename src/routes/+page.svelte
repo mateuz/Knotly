@@ -779,7 +779,16 @@
 		return `Node ${i}`;
 	}
 
-function growParentBudget(nodeName: string, needed: number) {
+function adjustBudgetForRow(row: Row) {
+		if (!row.from || !(row.amount > 0)) return;
+		const totalIn = rows.reduce((s, r) => r.to === row.from ? s + (r.amount || 0) : s, 0);
+		if (totalIn === 0) return;
+		const totalOut = rows.reduce((s, r) => r.from === row.from ? s + (r.amount || 0) : s, 0);
+		const deficit = totalOut - totalIn;
+		if (deficit > 0) growParentBudget(row.from, deficit);
+	}
+
+	function growParentBudget(nodeName: string, needed: number) {
 		const incomingRows = rows.filter(r => r.to === nodeName);
 		if (incomingRows.length === 0) return;
 		const totalIn = incomingRows.reduce((s, r) => s + (r.amount || 0), 0);
@@ -1556,6 +1565,7 @@ function growParentBudget(nodeName: string, needed: number) {
 							class="w-full text-xs px-2 py-2 border border-transparent rounded focus:border-violet-300 focus:outline-none focus:bg-white bg-transparent transition-colors placeholder:text-slate-300 mx-1 my-1"
 							bind:value={row.from}
 							placeholder="Source"
+							onblur={() => adjustBudgetForRow(row)}
 						/>
 						<input
 							class="w-full text-xs px-2 py-2 border border-transparent rounded focus:border-violet-300 focus:outline-none focus:bg-white bg-transparent transition-colors placeholder:text-slate-300 mx-1 my-1"
@@ -1568,6 +1578,7 @@ function growParentBudget(nodeName: string, needed: number) {
 							bind:value={row.amount}
 							placeholder="0"
 							min="0"
+							onblur={() => adjustBudgetForRow(row)}
 						/>
 						<input
 							type="number"
